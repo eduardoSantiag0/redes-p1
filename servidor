@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 import asyncio
-from tcp import Servidor
+from tcp import Servidor, Conexao
 import re
 
+nicknames: dict[bytes, Conexao] = {}
+canais = set()   
+canais_nickname: dict[bytes, set[bytes]] = {} # Hashmap: canais_nicknames
 
 def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
@@ -13,22 +16,220 @@ def sair(conexao):
     conexao.fechar()
 
 
+
+# [:prefixo] <comando> <parâmetros> [:\r\n]
+    # prefixo: origem da mensagem  
+
+def nick(nome: bytes, conexao: Conexao) -> None:
+    nome = nome.strip()
+    nome_normalizado = nome.lower()
+
+    if conexao.usuario is None:
+        apelido_atual = b'*'
+    else:
+        apelido_atual = conexao.usuario
+
+    # Apelido inválido
+    if not validar_nome(nome):
+        resposta = (
+            b':server 432 %s %s :Erroneous nickname\r\n'
+            % (apelido_atual, nome)
+        )
+
+        conexao.enviar(resposta)
+        return
+
+    # Apelido já existe
+    if nome_normalizado in nicknames:
+        resposta = (
+            b':server 433 %s %s :Nickname is already in use\r\n'
+            % (apelido_atual, nome)
+        )
+
+        conexao.enviar(resposta)
+        return
+
+    # Primeira vez registrando nickname
+    if conexao.usuario is None:
+        nicknames[nome_normalizado] = conexao
+        conexao.usuario = nome
+
+        resposta = b':server 001 %s :Welcome\r\n' % nome
+        conexao.enviar(resposta)
+
+        resposta = b':server 422 %s :MOTD File is missing\r\n' % nome
+        conexao.enviar(resposta)
+
+        return
+
+    # Troca de nickname
+    apelido_antigo = conexao.usuario
+    apelido_antigo_normalizado = apelido_antigo.lower()
+
+    del nicknames[apelido_antigo_normalizado]
+
+    nicknames[nome_normalizado] = conexao
+    conexao.usuario = nome
+
+    resposta = b':%s NICK %s\r\n' % (
+        apelido_antigo,
+        nome,
+    )
+
+    conexao.enviar(resposta)
+
+# :remetente PRIVMSG destinatario :conteudo
+def privmsg(
+    destinatario: bytes,
+    payload: bytes,
+    conexao: Conexao
+) -> None:
+
+
+    if (destinatario.startswith(b'#')):
+        privmsg_canal(destinatario, payload, conexao)
+        return
+    
+    destinatario = destinatario.strip()
+    destinatario_normalizado = destinatario.lower()
+
+    if destinatario_normalizado not in nicknames:
+        return
+
+    conexao_destino = nicknames[destinatario_normalizado]
+
+    remetente = conexao.usuario
+
+    if remetente is None:
+        return
+
+    resposta = b':%s PRIVMSG %s :%s\r\n' % (
+        remetente,
+        destinatario,
+        payload,
+    )
+
+    conexao_destino.enviar(resposta)
+
+def privmsg_canal(
+    canal: bytes,
+    payload: bytes,
+    conexao: Conexao
+) -> None:
+    
+    canal = canal.strip()
+    canal_normalizado = canal.lower()
+
+    if canal_normalizado not in canais:
+        erro = b':server 403 %s :No such channel\r\n' % canal
+        conexao.enviar(erro)
+        return
+
+    # Mandar para todos do canal
+    usuarios_inscritos = canais_nickname[canal_normalizado]
+
+    remetente = conexao.usuario
+
+    for usuario in usuarios_inscritos: 
+        if usuario == remetente:
+            continue
+
+        resposta = b':%s PRIVMSG %s :%s\r\n' % (
+            remetente,
+            canal,
+            payload,
+        )
+        conexao_destino = nicknames[usuario]
+
+        conexao_destino.enviar(resposta)
+
+
+
+
+def join(
+    canal: bytes,
+    conexao: Conexao
+) -> None:
+    
+    if conexao.usuario is None:
+        return
+    
+    canal = canal.strip()
+    canal_normalizado = canal.lower()
+
+    # Registra o canal
+    canais.add(canal_normalizado) 
+
+    # Adiciona em canais_nickname
+    if canal_normalizado not in canais_nickname:
+        print("Canal criado")
+        canais_nickname[canal_normalizado] = set()
+
+    # Adiciona usuario
+    canais_nickname[canal_normalizado].add(conexao.usuario)
+
+    usuarios_inscritos = canais_nickname[canal_normalizado]
+
+    print(usuarios_inscritos)
+
+    resposta = b' '.join(usuarios_inscritos) + b'\r\n'
+
+    conexao.enviar(resposta)
+
+
+    
+
+
+
 def dados_recebidos(conexao, dados):
     if dados == b'':
         return sair(conexao)
+    
+
+    dados = conexao.dadosResiduais + dados
+
+    linhas = dados.split(b'\n')
+
+    conexao.dadosResiduais = linhas[-1]
+
+
+    for linha in linhas[:-1]: # O ultimo do vetor é vazio
+        linha = linha.strip(b'\r')
+
+        if linha.startswith(b'PING'):
+            params = linha.split(b'PING', 1)[1]
+            params = b':' + params[1:].strip()
+            resposta = b':server PONG server ' + params + b'\r\n'
+            conexao.enviar(resposta)
+        elif linha.startswith(b'NICK'):
+            nome = linha.split(b'NICK', 1)[1]
+            nick(nome, conexao)
+            print(nicknames)
+        elif linha.startswith(b'PRIVMSG'):
+            partes = linha.split(b' ', 2)
+
+            if len(partes) < 3:
+                continue
+
+            destinatario = partes[1]
+            payload = partes[2].removeprefix(b':')
+            privmsg(destinatario, payload, conexao)
+        elif linha.startswith(b'JOIN'):
+            canal = linha.split(b'JOIN', 1)[1]
+            join(canal, conexao)
+    
     print(conexao, dados)
 
 
 def conexao_aceita(conexao):
+
+
     print(conexao, 'nova conexão')
+    
 
-    # Note que, no Python, atributos NÃO precisam ser previamente declarados na classe!
-    # Se precisar, esta função é o melhor local para adicionar novos atributos ao objeto conexao.
-    #
-    # Por exemplo, para armazenar o nick do usuário:
     conexao.nick = b'*'
-
-    # Fique à vontade para adicionar mais atributos, se necessário.
+    conexao.dadosResiduais = b''
+    conexao.usuario = None
 
     conexao.registrar_recebedor(dados_recebidos)
 
@@ -36,3 +237,7 @@ def conexao_aceita(conexao):
 servidor = Servidor(6667)
 servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
 asyncio.get_event_loop().run_forever()
+
+# nc -C localhost 6667
+# python3 -m unittest tests.tests.test_join
+# python3 servidor.py
