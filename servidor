@@ -84,11 +84,6 @@ def privmsg(
     payload: bytes,
     conexao: Conexao
 ) -> None:
-
-
-    if (destinatario.startswith(b'#')):
-        privmsg_canal(destinatario, payload, conexao)
-        return
     
     destinatario = destinatario.strip()
     destinatario_normalizado = destinatario.lower()
@@ -145,40 +140,76 @@ def privmsg_canal(
 
 
 
-
 def join(
+    canal: bytes,
+    conexao: Conexao
+) -> None:
+
+    if conexao.usuario is None:
+        return
+
+    canal = canal.strip()
+    canal_normalizado = canal.lower()
+
+    # Canal precisa começar com #
+    if (
+        not canal.startswith(b'#')
+        or len(canal) <= 1
+        or not validar_nome(canal[1:])
+    ):
+        resposta = b':server 403 %s :No such channel\r\n' % canal
+        conexao.enviar(resposta)
+        return
+
+    # Registra o canal
+    if canal_normalizado not in canais_nickname:
+        canais.add(canal_normalizado)
+        canais_nickname[canal_normalizado] = set()
+
+    # Usuários que já estavam no canal
+    usuarios_inscritos = canais_nickname[canal_normalizado]
+
+    # Adiciona o novo usuário
+    usuarios_inscritos.add(conexao.usuario)
+
+    resposta = b':%s JOIN :%s\r\n' % (
+        conexao.usuario,
+        canal
+    )
+
+    # Envia para todos, inclusive quem acabou de entrar
+    for usuario in usuarios_inscritos:
+        conexao_destino = nicknames[usuario]
+        conexao_destino.enviar(resposta)
+
+def part(
     canal: bytes,
     conexao: Conexao
 ) -> None:
     
     if conexao.usuario is None:
         return
-    
-    canal = canal.strip()
+
+    canal = canal.strip().split(b' ', 1)[0]
+
     canal_normalizado = canal.lower()
 
-    # Registra o canal
-    canais.add(canal_normalizado) 
-
-    # Adiciona em canais_nickname
     if canal_normalizado not in canais_nickname:
-        print("Canal criado")
-        canais_nickname[canal_normalizado] = set()
+        return
 
-    # Adiciona usuario
-    canais_nickname[canal_normalizado].add(conexao.usuario)
+    if conexao.usuario not in canais_nickname[canal_normalizado]:
+        return
 
+    canais_nickname[canal_normalizado].discard(conexao.usuario)
     usuarios_inscritos = canais_nickname[canal_normalizado]
 
-    print(usuarios_inscritos)
+    resposta = b':%s PART %s\r\n' % (conexao.usuario, canal)
 
-    resposta = b' '.join(usuarios_inscritos) + b'\r\n'
+    for usuario in usuarios_inscritos:
+        conexao_destino = nicknames[usuario]
+        conexao_destino.enviar(resposta)
 
     conexao.enviar(resposta)
-
-
-    
-
 
 
 def dados_recebidos(conexao, dados):
@@ -213,10 +244,18 @@ def dados_recebidos(conexao, dados):
 
             destinatario = partes[1]
             payload = partes[2].removeprefix(b':')
-            privmsg(destinatario, payload, conexao)
+
+            if (destinatario.startswith(b'#')):
+                privmsg_canal(destinatario, payload, conexao)
+            else: 
+                privmsg(destinatario, payload, conexao)
+                
         elif linha.startswith(b'JOIN'):
             canal = linha.split(b'JOIN', 1)[1]
             join(canal, conexao)
+        elif linha.startswith(b'PART'):
+            canal = linha.split(b'PART', 1)[1]
+            part(canal, conexao)
     
     print(conexao, dados)
 
