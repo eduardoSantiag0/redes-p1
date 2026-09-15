@@ -11,7 +11,6 @@ def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
 
-
 def encontrar_canais_do_usuario(conexao: Conexao) -> set[bytes]:
     canais_inscritos = set()
 
@@ -184,7 +183,6 @@ def privmsg_canal(
         conexao_destino.enviar(resposta)
 
 
-
 def join(
     canal: bytes,
     conexao: Conexao
@@ -196,7 +194,6 @@ def join(
     canal = canal.strip()
     canal_normalizado = canal.lower()
 
-    # Canal precisa começar com #
     if (
         not canal.startswith(b'#')
         or len(canal) <= 1
@@ -206,26 +203,44 @@ def join(
         conexao.enviar(resposta)
         return
 
-    # Registra o canal
+    # Cria o canal
     if canal_normalizado not in canais_nickname:
         canais.add(canal_normalizado)
-        canais_nickname[canal_normalizado] = set()
+        canais_nickname[canal_normalizado] = []
 
-    # Usuários que já estavam no canal
     usuarios_inscritos = canais_nickname[canal_normalizado]
 
-    # Adiciona o novo usuário
-    usuarios_inscritos.add(conexao.usuario)
+    # Adiciona mantendo a ordem de entrada
+    if conexao.usuario not in usuarios_inscritos:
+        usuarios_inscritos.append(conexao.usuario)
 
     resposta = b':%s JOIN :%s\r\n' % (
         conexao.usuario,
         canal
     )
 
-    # Envia para todos, inclusive quem acabou de entrar
+    # Envia JOIN para todos
     for usuario in usuarios_inscritos:
         conexao_destino = nicknames[usuario]
         conexao_destino.enviar(resposta)
+
+    membros = b' '.join(usuarios_inscritos)
+
+    resposta_com_membros = b':server 353 %s = %s :%s\r\n' % (
+        conexao.usuario,
+        canal,
+        membros
+    )
+
+    conexao.enviar(resposta_com_membros)
+
+    resposta_fim_da_lista = (
+        b':server 366 %s %s :End of /NAMES list.\r\n'
+        % (conexao.usuario, canal)
+    )
+
+    conexao.enviar(resposta_fim_da_lista)
+    
 
 def part(
     canal: bytes,
@@ -326,3 +341,5 @@ asyncio.get_event_loop().run_forever()
 # nc -C localhost 6667
 # python3 -m unittest tests.tests.test_join
 # python3 servidor.py
+
+
