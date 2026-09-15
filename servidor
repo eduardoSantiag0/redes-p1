@@ -11,7 +11,52 @@ def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
 
+
+def encontrar_canais_do_usuario(conexao: Conexao) -> set[bytes]:
+    canais_inscritos = set()
+
+    for canal in canais_nickname:
+        if conexao.usuario in canais_nickname[canal]:
+            canais_inscritos.add(canal)
+
+    return canais_inscritos
+
+
 def sair(conexao):
+    if conexao.encerrada:
+        return
+
+    if conexao.usuario is None:
+        conexao.fechar()
+        return
+
+    remetente = conexao.usuario
+    canais_inscritos = encontrar_canais_do_usuario(conexao)
+
+    destinatarios = set()
+
+    # Descobre todos os usuários que compartilham algum canal
+    for canal in canais_inscritos:
+        usuarios_inscritos = canais_nickname[canal]
+
+        for usuario in usuarios_inscritos:
+            if usuario != remetente:
+                destinatarios.add(usuario)
+
+    resposta = b':%s QUIT :Connection closed\r\n' % remetente
+
+    # Cada usuário recebe apenas uma vez
+    for usuario in destinatarios:
+        conexao_destino = nicknames[usuario.lower()]
+        conexao_destino.enviar(resposta)
+
+    # Remove o usuário dos canais
+    for canal in canais_inscritos:
+        canais_nickname[canal].discard(remetente)
+
+    # Remove o nickname
+    nicknames.pop(remetente.lower(), None)
+
     print(conexao, 'conexão fechada')
     conexao.fechar()
 
@@ -269,6 +314,7 @@ def conexao_aceita(conexao):
     conexao.nick = b'*'
     conexao.dadosResiduais = b''
     conexao.usuario = None
+    conexao.encerrada = False
 
     conexao.registrar_recebedor(dados_recebidos)
 
