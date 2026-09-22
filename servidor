@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import asyncio
 from tcp import Servidor, Conexao
 import re
@@ -341,7 +342,7 @@ servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
 asyncio.get_event_loop().run_forever()
 
 # nc -C localhost 6667
-# python3 -m unittest tests.tests.test_join
+# python3 -m unittest tests.test_disconnect
 # python3 servidor.py
 
 
