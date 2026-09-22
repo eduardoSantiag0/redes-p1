@@ -183,6 +183,7 @@ def privmsg_canal(
         conexao_destino.enviar(resposta)
 
 
+
 def join(
     canal: bytes,
     conexao: Conexao
@@ -194,6 +195,7 @@ def join(
     canal = canal.strip()
     canal_normalizado = canal.lower()
 
+    # Canal precisa começar com #
     if (
         not canal.startswith(b'#')
         or len(canal) <= 1
@@ -203,28 +205,27 @@ def join(
         conexao.enviar(resposta)
         return
 
-    # Cria o canal
+    # Registra o canal
     if canal_normalizado not in canais_nickname:
         canais.add(canal_normalizado)
-        canais_nickname[canal_normalizado] = []
+        canais_nickname[canal_normalizado] = set()
 
+    # Usuários que já estavam no canal
     usuarios_inscritos = canais_nickname[canal_normalizado]
 
-    # Adiciona mantendo a ordem de entrada
-    if conexao.usuario not in usuarios_inscritos:
-        usuarios_inscritos.append(conexao.usuario)
+    # Adiciona o novo usuário
+    usuarios_inscritos.add(conexao.usuario)
 
     resposta = b':%s JOIN :%s\r\n' % (
         conexao.usuario,
         canal
     )
 
-    # Envia JOIN para todos
     for usuario in usuarios_inscritos:
         conexao_destino = nicknames[usuario]
         conexao_destino.enviar(resposta)
 
-    membros = b' '.join(usuarios_inscritos)
+    membros = b' '.join(sorted(usuarios_inscritos))
 
     resposta_com_membros = b':server 353 %s = %s :%s\r\n' % (
         conexao.usuario,
@@ -234,13 +235,14 @@ def join(
 
     conexao.enviar(resposta_com_membros)
 
-    resposta_fim_da_lista = (
-        b':server 366 %s %s :End of /NAMES list.\r\n'
-        % (conexao.usuario, canal)
+    resposta_fim_da_lista = b':server 366 %s %s :End of /NAMES list.\r\n' % (
+        conexao.usuario,
+        canal
     )
 
     conexao.enviar(resposta_fim_da_lista)
-    
+
+
 
 def part(
     canal: bytes,
